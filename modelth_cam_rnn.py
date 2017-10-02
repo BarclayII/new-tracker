@@ -214,8 +214,8 @@ class Model(NN.Module):
         return w.bmm(phi.view(batch_size, 512, -1)).view(batch_size, 1000, 13, 13)
 
     def get_top_classes(self, pi):
-        pi_tops, pi_indices = pi.topk(self.k, 1, sorted=True)
         pi_tops = F.softmax(pi_tops)
+        pi_tops, pi_indices = pi.topk(self.k, 1, sorted=True)
         if not self.training:
             pi_indices_np = tonumpy(pi_indices[0])
             cls_t_tops = NP.array([[self.labels[i] for i in s] for s in pi_indices_np])
