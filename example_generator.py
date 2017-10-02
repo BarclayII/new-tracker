@@ -18,7 +18,8 @@ def bbox_shift(img, tlbr, lambda_scale, lambda_shift, min_scale, max_scale):
     new_width = -1
     trials = 0
     while new_width < 0 or new_width > cols - 1:
-        width_scale_factor = NP.clip(RNG.exponential(1. / lambda_scale) * RNG.choice([-1, 1]), min_scale, max_scale)
+        #width_scale_factor = NP.clip(RNG.exponential(1. / lambda_scale) * RNG.choice([-1, 1]), min_scale, max_scale)
+        width_scale_factor = RNG.uniform(-0.2, 0.2)
         new_width = NP.clip(width * (1 + width_scale_factor), 1, cols - 1)
         trials += 1
         if trials > 10:
@@ -26,17 +27,18 @@ def bbox_shift(img, tlbr, lambda_scale, lambda_shift, min_scale, max_scale):
     new_height = -1
     trials = 0
     while new_height < 0 or new_height > rows - 1:
-        height_scale_factor = NP.clip(RNG.exponential(1. / lambda_scale) * RNG.choice([-1, 1]), min_scale, max_scale)
+        #height_scale_factor = NP.clip(RNG.exponential(1. / lambda_scale) * RNG.choice([-1, 1]), min_scale, max_scale)
+        height_scale_factor = RNG.uniform(-0.2, 0.2)
         new_height = NP.clip(height * (1 + height_scale_factor), 1, rows - 1)
         trials += 1
         if trials > 10:
             raise TimeoutError
 
     #new_x_temp = cx + width * RNG.exponential(1. / lambda_shift) * RNG.choice([-1, 1])
-    new_x_temp = cx + width * RNG.uniform(0, 1) * RNG.choice([-1, 1])
+    new_x_temp = cx + width * RNG.uniform(-0.5, 0.5)
     new_cx = NP.clip(new_x_temp, new_width / 2, cols - new_width / 2)
+    new_y_temp = cy + height * RNG.uniform(-0.5, 0.5)
     #new_y_temp = cy + height * RNG.exponential(1. / lambda_shift) * RNG.choice([-1, 1])
-    new_y_temp = cy + height * RNG.uniform(0, 1) * RNG.choice([-1, 1])
     new_cy = NP.clip(new_y_temp, new_height / 2, rows - new_height / 2)
 
     return NP.array([
@@ -70,14 +72,19 @@ def compute_crop_pad_image_loc(tlbr, img, ctx_factor=2, padding=True):
 
     roi_left = max(0, cx - output_width / 2)
     roi_top = max(0, cy - output_height / 2)
+    '''
     left_half = min(output_width / 2, cx)
     right_half = min(output_width / 2, cols - cx)
     roi_width = max(1, left_half + right_half)
     top_half = min(output_height / 2, cy)
     bottom_half = min(output_height / 2, rows - cy)
     roi_height = max(1, top_half + bottom_half)
+    '''
+    roi_right = min(cols, cx + output_width / 2)
+    roi_bottom = min(rows, cy + output_height / 2)
 
-    return roi_top, roi_left, roi_top + roi_height, roi_left + roi_width, ctx_factor
+    #return roi_top, roi_left, roi_top + roi_height, roi_left + roi_width, ctx_factor
+    return roi_top, roi_left, roi_bottom, roi_right, ctx_factor
 
 def crop_pad_image(tlbr, img, ctx_factor=2, padding=True):
     new_top, new_left, new_bottom, new_right, ctx_factor = compute_crop_pad_image_loc(tlbr, img, ctx_factor, padding)
@@ -104,7 +111,10 @@ def crop_pad_image(tlbr, img, ctx_factor=2, padding=True):
     edge_spacing_x = int(min(edge_spacing_x, output_width - 1))
     edge_spacing_y = int(min(edge_spacing_y, output_height - 1))
 
-    output_img = NP.zeros((output_height, output_width, 3))
+    edge_spacing_x = 0
+    edge_spacing_y = 0
+
+    output_img = NP.zeros((roi_height, roi_width, 3))
     output_img[edge_spacing_y : edge_spacing_y + roi_height, edge_spacing_x : edge_spacing_x + roi_width] = cropped_image
     roi_tlbr = NP.array((roi_top, roi_left, roi_top + roi_height, roi_left + roi_width))
     return output_img, roi_tlbr, edge_spacing_x, edge_spacing_y
@@ -118,7 +128,7 @@ def make_single_training_example(img, bbox, gt, synth, lambda_scale, lambda_shif
     else:
         shifted_bbox = bbox
     fake = synth and random and RNG.randint(2) == 0
-    search_img, search_bbox, edge_spacing_x, edge_spacing_y = crop_pad_image(shifted_bbox, img_fake if fake else img)
+    search_img, search_bbox, edge_spacing_x, edge_spacing_y = crop_pad_image(shifted_bbox, img_fake if fake else img, padding=True)
 
     recentered_bbox = NP.array([
         gt[0] - search_bbox[0] + edge_spacing_y,

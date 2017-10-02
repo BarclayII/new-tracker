@@ -5,7 +5,12 @@ import numpy as NP
 import numpy.random as RNG
 import cv2
 import os
+import matplotlib
+if not os.getenv('APPDEBUG', None):
+    matplotlib.use('Agg')
+import matplotlib.pyplot as PL
 
+from util import addbox
 from example_generator import *
 
 class DictList(dict):
@@ -77,7 +82,7 @@ class ALOVDataset(VideoDataset):
 
         bboxes = NP.array(bboxes)
         imgs = imgs[anno_0-1:anno_1]
-        return imgs, bboxes
+        return imgs, bboxes, 0
 
 class ImageNetVidDatasetBase(VideoDataset):
     def __init__(self):
@@ -128,7 +133,7 @@ class ImageNetVidDatasetBase(VideoDataset):
     def _load_file(self, file_):
         return NotImplemented
 
-    def pick(self, train=True):
+    def pick(self, train=True, frames=5):
         anno_set = self.train_annotations if train else self.val_annotations
         anno_dir = RNG.choice(anno_set.keys())
         anno_file = anno_dir + '/000000.xml'
@@ -139,47 +144,52 @@ class ImageNetVidDatasetBase(VideoDataset):
         data_dir = self._getpath('Data/VID/%s/%s' % ('train' if train else 'val', folder))
 
         while True:
-            anno_idx = RNG.choice(anno_set[anno_dir] - 1)
+            anno_idx = RNG.choice(anno_set[anno_dir] - frames + 1)
+            trackids_list = []
+            anno_cur_list = []
+            anno_cur_root_list = []
+            objs_list = []
+            data_file_list = []
 
-            anno_prev_file = anno_dir + '/%06d.xml' % anno_idx
-            anno_next_file = anno_dir + '/%06d.xml' % (anno_idx + 1)
-            data_prev_file = data_dir + '/%06d.JPEG' % anno_idx
-            data_next_file = data_dir + '/%06d.JPEG' % (anno_idx + 1)
+            for i in range(frames):
+                idx = anno_idx + i
+                anno_file = anno_dir + '/%06d.xml' % idx
+                data_file = data_dir + '/%06d.JPEG' % idx
+                anno_cur = self._load_file(anno_file)
+                anno_cur_root = ETREE.parse(anno_cur, parser=_parser).getroot()
+                objs = anno_cur_root.findall('object')
+                trackids = {obj.find("trackid").text: obj for obj in objs}
 
-            anno_prev = self._load_file(anno_prev_file)
-            anno_next = self._load_file(anno_next_file)
-            anno_prev_root = ETREE.parse(anno_prev, parser=_parser).getroot()
-            anno_next_root = ETREE.parse(anno_next, parser=_parser).getroot()
+                trackids_list.append(trackids)
+                anno_cur_list.append(anno_cur)
+                anno_cur_root_list.append(anno_cur_root)
+                objs_list.append(objs)
+                data_file_list.append(data_file)
 
-            prev_objs = anno_prev_root.findall('object')
-            next_objs = anno_next_root.findall('object')
-            prev_trackids = {obj.find('trackid').text: obj for obj in prev_objs}
-            next_trackids = {obj.find('trackid').text: obj for obj in next_objs}
-            trackids = set(prev_trackids.keys()) & set(next_trackids.keys())
+            trackids = reduce(lambda a, b: a & b, [set(_.keys()) for _ in trackids_list], set(trackids_list[0].keys()))
             if len(trackids) != 0:
                 break
+            else:
+                for f in anno_cur_list:
+                    f.close()
 
         trackid = RNG.choice(list(trackids))
-        prev_obj = prev_trackids[trackid]
-        cls_idx = self.classes.index(prev_obj.find('name').text)
-        next_obj = next_trackids[trackid]
+        objs = [_[trackid] for _ in trackids_list]
+        cls_idx = self.classes.index(objs[0].find('name').text)
 
         order = ['ymin', 'xmin', 'ymax', 'xmax']
-        prev_bbox = NP.array([int(prev_obj.find('bndbox').find(tag).text) for tag in order])
-        next_bbox = NP.array([int(next_obj.find('bndbox').find(tag).text) for tag in order])
+        bboxes = [NP.array([int(obj.find('bndbox').find(tag).text) for tag in order]) for obj in objs]
+        imgs = [cv2.imread(f) for f in data_file_list]
 
         #data_prev = self._load_file(data_prev_file)
         #data_next = self._load_file(data_next_file)
-        prev_img = cv2.imread(data_prev_file)
-        next_img = cv2.imread(data_next_file)
 
         anno.close()
-        anno_prev.close()
-        anno_next.close()
+        [f.close() for f in anno_cur_list]
         #data_prev.close()
         #data_next.close()
 
-        return prev_img, next_img, prev_bbox, next_bbox, cls_idx
+        return imgs, bboxes, cls_idx
 
     def pick_video(self, i, train=True):
         anno_set = self.train_annotations if train else self.val_annotations
@@ -265,7 +275,7 @@ class ImageNetVidTarDataset(ImageNetVidDatasetBase):
 
 
 def prepare_batch(num_img, num_ext, dataset, lambda_scale, lambda_shift, min_scale, max_scale, train=True, resize=None,
-                  swapdims=False, random=False):
+                  swapdims=False, random=False, target_resize=True):
     images = []
     targets = []
     scaled_bboxes = []
@@ -273,35 +283,64 @@ def prepare_batch(num_img, num_ext, dataset, lambda_scale, lambda_shift, min_sca
     negatives = []
 
     for j in range(num_img):
-        prev_img, next_img, prev_bbox, next_bbox, cls = dataset.pick()
-        fake_img, _, _, _, _ = dataset.pick()
+        imgs, bboxes, cls = dataset.pick()
+        prev_img = imgs[0]
+        prev_bbox = bboxes[0]
 
-        target_pad, _, _, _ = crop_pad_image(prev_bbox, prev_img, padding=False)
+        target_pad, _, _, _ = crop_pad_image(prev_bbox, prev_img, padding=False, ctx_factor=1)
+        target_rows, target_cols, _ = target_pad.shape
+        target_scale = min(1, target_rows / 400., target_cols / 400.)
+        if target_scale != 1:
+            target_rows = int(target_rows / target_scale)
+            target_cols = int(target_cols / target_scale)
+            target_pad = cv2.resize(target_pad, (target_cols, target_rows))
 
         for i in range(num_ext):
-            while True:
-                try:
-                    focus_img, scaled_bbox_gt, _, _, _, negative = make_single_training_example(
-                            next_img, prev_bbox, next_bbox, i != 0, lambda_scale, lambda_shift, min_scale, max_scale, random=random, img_fake=fake_img
-                            )
-                    break
-                except TimeoutError:
-                    pass
-            images.append(focus_img)
+            focus_imgs = []
+            scaled_bbox = []
+            negs = []
+            for j in range(len(imgs)):
+                next_img = imgs[j]
+                next_bbox = bboxes[j]
+                while True:
+                    try:
+                        focus_img, scaled_bbox_gt, _, _, _, negative = make_single_training_example(
+                                next_img, prev_bbox, next_bbox, True, lambda_scale, lambda_shift, min_scale, max_scale, random=random
+                                )
+                        #fig, ax = PL.subplots()
+                        #ax.imshow(focus_img[:, :, ::-1].astype('uint8'))
+                        #scale_back = NP.array([
+                        #    focus_img.shape[0],
+                        #    focus_img.shape[1],
+                        #    focus_img.shape[0],
+                        #    focus_img.shape[1],
+                        #    ])
+                        #addbox(ax, (scaled_bbox_gt + 1) * scale_back / 2., 'red')
+                        #PL.show()
+                        break
+                    except TimeoutError:
+                        pass
+                focus_imgs.append(next_img)
+                scaled_bbox.append(next_bbox)
+            images.append(focus_imgs)
             targets.append(target_pad)
-            scaled_bboxes.append(scaled_bbox_gt)
+            scaled_bboxes.append(scaled_bbox)
             cls_indices.append(cls)
-            negatives.append(negative)
 
-    if resize is not None:
+    if resize:
         for i in range(num_img * num_ext):
-            images[i] = cv2.resize(images[i], (resize, resize))
-            targets[i] = cv2.resize(targets[i], (resize, resize))
+            for t in range(len(images[i])):
+                images[i][t] = cv2.resize(images[i][t], (resize, resize))
         images = NP.array(images)
+        if swapdims:
+            images = images.transpose(0, 1, 4, 2, 3)
+
+    if target_resize and resize:
+        for i in range(num_img * num_ext):
+            targets[i] = cv2.resize(targets[i], (resize, resize))
         targets = NP.array(targets)
         if swapdims:
-            images = images.transpose(0, 3, 1, 2)
             targets = targets.transpose(0, 3, 1, 2)
 
     return NP.array(images) / 255., NP.array(targets) / 255., NP.array(scaled_bboxes), \
-              NP.array(negatives, dtype='float32'), NP.array(cls_indices, dtype='int32')
+              NP.array(cls_indices, dtype='int32')
