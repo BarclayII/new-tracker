@@ -59,24 +59,24 @@ for i in range(valid_size):
     pp = tovar(pp).permute(2, 0, 1)
     b = tovar(b)
 
-    b_list, loss = model.forward(px, pp, b)
+    b_list, loss = model.forward(px, pp, b, 1)
 
     for t in range(5):
         fig, ax = PL.subplots(2, 4)
         ax[0][0].imshow(x[:, :, ::-1])
         ax[0][1].imshow(p[:, :, ::-1])
-        ax[0][2].imshow(model.p_t_list[t][0, :, :, ::-1])
-        ax[0][3].set_title(figure_title(model.cls_t_0_tops[0, 0], model.pi_t_0_tops[0, 0]))
+        ax[0][2].imshow(model.p_t_list[t][0].transpose(1, 2, 0)[:, :, ::-1])
+        ax[0][2].set_title(figure_title(model.cls_t_0_tops[0, 0], model.pi_t_0_tops[0, 0]), fontsize=6)
         ax[0][3].imshow(model.m_t_topk[t][0, 0])
-        ax[0][3].set_title(figure_title(model.cls_t_topk[t][0, 0], model.pi_t_topk[t][0, 0]))
+        ax[0][3].set_title(figure_title(model.cls_t_topk[t][0, 0], model.pi_t_topk[t][0, 0]), fontsize=6)
         ax[1][0].imshow(model.m_t_topk[t][0, 1])
-        ax[0][3].set_title(figure_title(model.cls_t_topk[t][0, 1], model.pi_t_topk[t][0, 1]))
+        ax[1][0].set_title(figure_title(model.cls_t_topk[t][0, 1], model.pi_t_topk[t][0, 1]), fontsize=6)
         ax[1][1].imshow(model.m_t_topk[t][0, 2])
-        ax[0][3].set_title(figure_title(model.cls_t_topk[t][0, 2], model.pi_t_topk[t][0, 2]))
+        ax[1][1].set_title(figure_title(model.cls_t_topk[t][0, 2], model.pi_t_topk[t][0, 2]), fontsize=6)
         ax[1][2].imshow(model.m_t_topk[t][0, 3])
-        ax[0][3].set_title(figure_title(model.cls_t_topk[t][0, 3], model.pi_t_topk[t][0, 3]))
+        ax[1][2].set_title(figure_title(model.cls_t_topk[t][0, 3], model.pi_t_topk[t][0, 3]), fontsize=6)
         ax[1][3].imshow(model.m_t_topk[t][0, 4])
-        ax[0][3].set_title(figure_title(model.cls_t_topk[t][0, 4], model.pi_t_topk[t][0, 4]))
+        ax[1][3].set_title(figure_title(model.cls_t_topk[t][0, 4], model.pi_t_topk[t][0, 4]), fontsize=6)
         if os.getenv('APPDEBUG', None):
             PL.show()
         else:
