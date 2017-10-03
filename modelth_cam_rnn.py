@@ -44,22 +44,22 @@ def safe_log_sigmoid(x, boundary=-80):
     return y * (1 - x_bound) + x * x_bound
 
 def compute_iou(a, b):
-    a_top = a[:, 0]
-    a_left = a[:, 1]
-    a_bottom = a[:, 2]
-    a_right = a[:, 3]
-    b_top = b[:, 0]
-    b_left = b[:, 1]
-    b_bottom = b[:, 2]
-    b_right = b[:, 3]
+    a_top = a[..., 0]
+    a_left = a[..., 1]
+    a_bottom = a[..., 2]
+    a_right = a[..., 3]
+    b_top = b[..., 0]
+    b_left = b[..., 1]
+    b_bottom = b[..., 2]
+    b_right = b[..., 3]
     a_w = T.abs(a_right - a_left)
     a_h = T.abs(a_bottom - a_top)
     b_w = T.abs(b_right - b_left)
     b_h = T.abs(b_bottom - b_top)
-    inter_top = T.max(a_top, b_top)
-    inter_left = T.max(a_left, b_left)
-    inter_bottom = T.min(a_bottom, b_bottom)
-    inter_right = T.min(a_right, b_right)
+    inter_top = T.max(T.min(a_top, a_bottom), T.min(b_top, b_bottom))
+    inter_left = T.max(T.min(a_left, a_right), T.min(b_left, b_right))
+    inter_bottom = T.min(T.max(a_bottom, a_top), T.max(b_bottom, b_top))
+    inter_right = T.min(T.max(a_right, a_left), T.max(b_right, b_left))
     inter_w = T.abs(inter_right - inter_left)
     inter_h = T.abs(inter_bottom - inter_top)
     inter_area = inter_w * inter_h
@@ -135,8 +135,15 @@ class Model(NN.Module):
                 *(list(self.sq.classifier.children())[:-1] + [GlobalAvgPool2d()]))
         self.k = k
 
+        self.cam_compressor = NN.Sequential(
+                NN.Conv2d(1000, 256, 1),
+                )
+        self.feat_compressor = NN.Sequential(
+                NN.Conv2d(512, 256, 1),
+                )
+
         self.masking = NN.Sequential(
-                NN.Conv2d(1000 + 512, 256, 3, padding=1),
+                NN.Conv2d(256 * 2, 256, 3, padding=1),
                 NN.Conv2d(256, 256, 3, padding=1),
                 NN.ReLU(),
                 NN.Conv2d(256, 128, 3, padding=1),
@@ -157,6 +164,8 @@ class Model(NN.Module):
 
         with open('imagenet_labels2', 'rb') as f:
             self.labels = pickle.load(f)
+
+        self.teaching = True
 
     def train(self, mode=True):
         super(Model, self).train(mode)
@@ -249,6 +258,8 @@ class Model(NN.Module):
 
         for t in range(nframes):
             x_t = x[t]
+            if self.teaching:
+                b_t_1 = b[max(t-1, 0)].unsqueeze(0).expand(batch_size, 4)
 
             s_t = self.generate_search_area(b_t_1, (rows, cols))
             p_t = crop_bilinear(
@@ -274,11 +285,14 @@ class Model(NN.Module):
             else:
                 m_t_gathered = None
 
-            b_input = self.masking(T.cat([m_t, phi_t], 1))
-            b_t_1 = self.scale_from(self.b_decision(b_input.view(batch_size, -1)), s_t)
+            m_t_compressed = self.cam_compressor(m_t)
+            phi_t_compressed = self.feat_compressor(phi_t)
+            b_input = self.masking(T.cat([m_t_compressed, phi_t_compressed], 1))
+            b_hat = self.b_decision(b_input.view(batch_size, -1))
+            b_t_1 = self.scale_from(b_hat, s_t)
             b_list.append(b_t_1)
 
-            loss += T.abs(b_t_1 - b[t]).mean()
+            loss += T.abs(b_hat - self.scale_to(b[t].unsqueeze(0), s_t)).mean()
 
             self.m_t_topk.append(tonumpy(m_t_gathered))
             self.pi_t_topk.append(tonumpy(pi_t_tops))
@@ -286,4 +300,5 @@ class Model(NN.Module):
             self.p_t_list.append(tonumpy(p_t))
             self.s_t_list.append(tonumpy(s_t))
 
-        return T.stack(b_list, 1), loss
+        b_hat = T.stack(b_list, 1)
+        return b_hat, loss, compute_iou(b_hat, b.unsqueeze(0).expand(batch_size, nframes, 4)).mean()
