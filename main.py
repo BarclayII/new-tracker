@@ -12,7 +12,9 @@ from util import addbox
 
 sh.mkdir('-p', 'viz-val')
 
-model = Model(5).cuda()
+model = Model(5)
+if not os.getenv('NOCUDA', None):
+    model = model.cuda()
 data = dataset.ImageNetVidDataset('/beegfs/qg323/ILSVRC', 'map_vid.txt')
 
 opt = T.optim.Adam(p for p in model.parameters() if p.requires_grad)
@@ -89,3 +91,4 @@ for i in range(valid_size):
             PL.show()
         else:
             PL.savefig('viz-val/%05d-%05d-%d.png' % (epoch, i, t))
+        PL.close()

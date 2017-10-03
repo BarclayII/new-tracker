@@ -9,6 +9,7 @@ import os
 import matplotlib
 if not os.getenv('APPDEBUG', None):
     matplotlib.use('Agg')
+nocuda = bool(os.getenv('NOCUDA', None))
 import matplotlib.pyplot as PL
 import numpy as NP
 import numpy.random as RNG
@@ -18,10 +19,13 @@ from util import addbox
 def tovar(*arrs, **kwargs):
     tensors = [(T.FloatTensor(NP.array(a).astype('float32')) if not T.is_tensor(a) and not isinstance(a, T.autograd.Variable) else a.float())
                for a in arrs]
+    vars_ = [T.autograd.Variable(t) for t in tensors]
+    if not nocuda:
+        vars_ = [v.cuda() for v in vars_]
     if len(arrs) == 1:
-        return T.autograd.Variable(tensors[0]).cuda()
+        return vars_[0]
     else:
-        return [T.autograd.Variable(t).cuda() for t in tensors]
+        return vars_
 
 def tonumpy(*vars_):
     result = []
@@ -241,8 +245,8 @@ class Model(NN.Module):
         b: (nframes, 4) ground truth bbox unscaled
         '''
 
-        mean = T.autograd.Variable(T.Tensor([0.485, 0.456, 0.406]).cuda().view(1, 3, 1, 1))
-        std = T.autograd.Variable(T.Tensor([0.229, 0.224, 0.225]).cuda().view(1, 3, 1, 1))
+        mean = tovar(T.Tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        std = tovar(T.Tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
         nframes, nchannels, rows, cols = x.size()
         phi = self.sq.features((target.unsqueeze(0) - mean) / std)
         pi_t_0 = pi_t = self.classifier(phi).squeeze(3).squeeze(2)
@@ -273,12 +277,13 @@ class Model(NN.Module):
 
             m_t_all = self.cam(phi_t)
             pi_t_tops, pi_t_indices, cls_t_tops = self.get_top_classes(pi_t)
-            pi_t_trunc = T.autograd.Variable(T.zeros(*pi_t.size())).cuda()
+            pi_t_trunc = tovar(T.zeros(*pi_t.size()))
             pi_t_trunc = pi_t_trunc.scatter_(1, pi_t_indices, pi_t_tops)
             m_t = m_t_all * pi_t_trunc[:, :, NP.newaxis, NP.newaxis].expand(batch_size, 1000, 13, 13)
 
             if not self.training:
-                m_t_indices_0 = T.arange(0, batch_size).cuda().long().unsqueeze(1).expand(batch_size, self.k)
+                m_t_indices_0 = tovar(T.arange(0, batch_size)).data
+                m_t_indices_0 = m_t_indices_0.long().unsqueeze(1).expand(batch_size, self.k)
                 m_t_indices_0 = m_t_indices_0.contiguous().view(-1)
                 m_t_indices_1 = pi_t_indices.view(-1).data
                 m_t_gathered = m_t[m_t_indices_0, m_t_indices_1].view(batch_size, self.k, 13, 13)
