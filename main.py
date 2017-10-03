@@ -9,21 +9,32 @@ if os.getenv('APPDEBUG', None):
 import matplotlib.pyplot as PL
 import sh
 from util import addbox
+import argparse
+import sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--train_iter', type=int, default=1000, help='training iterations per epoch')
+parser.add_argument('--epochs', type=int, default=5, help='# of epochs')
+parser.add_argument('--valid_size', type=int, default=100, help='validation set size')
+parser.add_argument('-k', type=int, default=5, help='number of activated CAMs')
+parser.add_argument('--ilsvrc', type=str, help='location of ImageNet VID dataset')
+
+args = parser.parse_args()
 
 sh.mkdir('-p', 'viz-val')
 
-model = Model(5)
+model = Model(args.k)
 if not os.getenv('NOCUDA', None):
     model = model.cuda()
-data = dataset.ImageNetVidDataset('/beegfs/qg323/ILSVRC', 'map_vid.txt')
+data = dataset.ImageNetVidDataset(args.ilsvrc, 'map_vid.txt')
 
 opt = T.optim.Adam(p for p in model.parameters() if p.requires_grad)
 
 valid_set = []
 
 epoch = 0
-valid_size = 5
-train_iter = 1000
+valid_size = args.valid_size
+train_iter = args.train_iter
 
 for _ in range(valid_size):
     result = dataset.prepare_batch(1, 1, data, 15, 5, -0.4, 0.4, resize=None, swapdims=False, train=False,
@@ -34,61 +45,68 @@ for _ in range(valid_size):
     b = b[0]
     valid_set.append((px, pp, b))
 
-model.train()
-for i in range(train_iter):
-    result = dataset.prepare_batch(1, 1, data, 15, 5, -0.4, 0.4, resize=None, swapdims=False, train=True,
-            random=False, target_resize=False)
-
-    px, pp, b, cls = result
-    px = px[0]
-    pp = pp[0]
-    b = b[0]
-
-    px = tovar(px).permute(0, 3, 1, 2)
-    pp = tovar(pp).permute(2, 0, 1)
-    b = tovar(b)
-    _, loss, iou = model.forward(px, pp, b)
-    opt.zero_grad()
-    loss.backward()
-    opt.step()
-    print i, tonumpy(loss), tonumpy(iou)
-
 def figure_title(cls, pi):
     cls = cls.split(',')[0]
     return '%s/%.5f' % (cls, pi)
 
-model.eval()
-for i in range(valid_size):
-    px, pp, b = valid_set[i]
-    x = px[0]
-    p = pp
-    px = tovar(px).permute(0, 3, 1, 2)
-    pp = tovar(pp).permute(2, 0, 1)
-    b = tovar(b)
+for epoch in range(args.epochs):
+    model.train()
+    for i in range(train_iter):
+        result = dataset.prepare_batch(1, 1, data, 15, 5, -0.4, 0.4, resize=None, swapdims=False, train=True,
+                random=False, target_resize=False)
 
-    b_list, loss, iou = model.forward(px, pp, b, 1)
-    b, b_list = tonumpy(b, b_list)
+        px, pp, b, cls = result
+        px = px[0]
+        pp = pp[0]
+        b = b[0]
 
-    for t in range(5):
-        fig, ax = PL.subplots(2, 4)
-        ax[0][0].imshow(x[:, :, ::-1])
-        addbox(ax[0][0], b[t], 'red')
-        addbox(ax[0][0], b_list[0, t], 'yellow')
-        ax[0][1].imshow(p[:, :, ::-1])
-        ax[0][2].imshow(model.p_t_list[t][0].transpose(1, 2, 0)[:, :, ::-1])
-        ax[0][2].set_title(figure_title(model.cls_t_0_tops[0, 0], model.pi_t_0_tops[0, 0]), fontsize=6)
-        ax[0][3].imshow(model.m_t_topk[t][0, 0])
-        ax[0][3].set_title(figure_title(model.cls_t_topk[t][0, 0], model.pi_t_topk[t][0, 0]), fontsize=6)
-        ax[1][0].imshow(model.m_t_topk[t][0, 1])
-        ax[1][0].set_title(figure_title(model.cls_t_topk[t][0, 1], model.pi_t_topk[t][0, 1]), fontsize=6)
-        ax[1][1].imshow(model.m_t_topk[t][0, 2])
-        ax[1][1].set_title(figure_title(model.cls_t_topk[t][0, 2], model.pi_t_topk[t][0, 2]), fontsize=6)
-        ax[1][2].imshow(model.m_t_topk[t][0, 3])
-        ax[1][2].set_title(figure_title(model.cls_t_topk[t][0, 3], model.pi_t_topk[t][0, 3]), fontsize=6)
-        ax[1][3].imshow(model.m_t_topk[t][0, 4])
-        ax[1][3].set_title(figure_title(model.cls_t_topk[t][0, 4], model.pi_t_topk[t][0, 4]), fontsize=6)
-        if os.getenv('APPDEBUG', None):
-            PL.show()
-        else:
-            PL.savefig('viz-val/%05d-%05d-%d.png' % (epoch, i, t))
-        PL.close()
+        px = tovar(px).permute(0, 3, 1, 2)
+        pp = tovar(pp).permute(2, 0, 1)
+        b = tovar(b)
+        _, loss, iou = model.forward(px, pp, b)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        print 'Training', epoch, i, tonumpy(loss), tonumpy(iou)
+
+    model.eval()
+    iou_sum = 0
+    for i in range(valid_size):
+        px, pp, b = valid_set[i]
+        x = px[0]
+        p = pp
+        px = tovar(px).permute(0, 3, 1, 2)
+        pp = tovar(pp).permute(2, 0, 1)
+        b = tovar(b)
+
+        b_list, loss, iou = model.forward(px, pp, b, 1)
+        iou_sum += tonumpy(iou)
+        print 'Validation', epoch, i, tonumpy(loss), tonumpy(iou)
+        b, b_list = tonumpy(b, b_list)
+
+        for t in range(5):
+            fig, ax = PL.subplots(2, 4)
+            ax[0][0].imshow(x[:, :, ::-1])
+            addbox(ax[0][0], b[t], 'red')
+            addbox(ax[0][0], b_list[0, t], 'yellow')
+            ax[0][1].imshow(p[:, :, ::-1])
+            ax[0][2].imshow(model.p_t_list[t][0].transpose(1, 2, 0)[:, :, ::-1])
+            ax[0][2].set_title(figure_title(model.cls_t_0_tops[0, 0], model.pi_t_0_tops[0, 0]), fontsize=6)
+            # We always show top-5 CAMs here regardless of the actual k value
+            ax[0][3].imshow(model.m_t_topk[t][0, 0])
+            ax[0][3].set_title(figure_title(model.cls_t_topk[t][0, 0], model.pi_t_topk[t][0, 0]), fontsize=6)
+            ax[1][0].imshow(model.m_t_topk[t][0, 1])
+            ax[1][0].set_title(figure_title(model.cls_t_topk[t][0, 1], model.pi_t_topk[t][0, 1]), fontsize=6)
+            ax[1][1].imshow(model.m_t_topk[t][0, 2])
+            ax[1][1].set_title(figure_title(model.cls_t_topk[t][0, 2], model.pi_t_topk[t][0, 2]), fontsize=6)
+            ax[1][2].imshow(model.m_t_topk[t][0, 3])
+            ax[1][2].set_title(figure_title(model.cls_t_topk[t][0, 3], model.pi_t_topk[t][0, 3]), fontsize=6)
+            ax[1][3].imshow(model.m_t_topk[t][0, 4])
+            ax[1][3].set_title(figure_title(model.cls_t_topk[t][0, 4], model.pi_t_topk[t][0, 4]), fontsize=6)
+            if os.getenv('APPDEBUG', None):
+                PL.show()
+            else:
+                PL.savefig('viz-val/%05d-%05d-%d.png' % (epoch, i, t))
+            PL.close()
+    print 'Average validation IOU:', iou_sum / valid_size
+    T.save(model, 'model-%03d' % epoch)

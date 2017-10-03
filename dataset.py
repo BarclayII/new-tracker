@@ -115,8 +115,7 @@ class ImageNetVidDatasetBase(VideoDataset):
                     root = doc.getroot()
                     objs = root.findall('object')
                     cls |= set(obj.find('name').text for obj in objs)
-        assert train_classes == val_classes
-        self.classes = list(train_classes)
+        self.classes = list(train_classes | val_classes)
         print 'Number of classes: %d' % len(self.classes)
 
         self.train_annotations = {k: len(self.train_annotations[k]) for k in self.train_annotations}
