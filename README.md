@@ -1,7 +1,8 @@
 # new-tracker
 A new arbitrary object tracker without recurrence
 
-For a test run, extract the bzip2 archive into the current directory and run
+For a test run, extract the bzip2 archive [here](https://drive.google.com/open?id=0B04f_ATQk8h1OXNvVzMzbUxEUXc)
+into the current directory and run
 ```
 python main.py --ilsvrc ILSVRC
 ```
