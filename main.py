@@ -15,7 +15,7 @@ import sys
 parser = argparse.ArgumentParser()
 parser.add_argument('--train_iter', type=int, default=1000, help='training iterations per epoch')
 parser.add_argument('--epochs', type=int, default=5, help='# of epochs')
-parser.add_argument('--valid_size', type=int, default=100, help='validation set size')
+parser.add_argument('--valid_size', type=int, default=10, help='validation set size')
 parser.add_argument('-k', type=int, default=5, help='number of activated CAMs')
 parser.add_argument('--ilsvrc', type=str, help='location of ImageNet VID dataset')
 
