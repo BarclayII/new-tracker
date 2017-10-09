@@ -89,11 +89,11 @@ for epoch in range(args.epochs):
     model.train()
     iou_sum = 0
     for i in range(valid_size):
-        result = dataset.prepare_batch(1, 1, data, 15, 5, -0.4, 0.4, resize=None, swapdims=False, train=True,
+        #result = dataset.prepare_batch(1, 1, data, 15, 5, -0.4, 0.4, resize=None, swapdims=False, train=True,
                 random=False, target_resize=False)
 
-        px, pp, b, cls = result
-        #px, pp, b = valid_set[i]
+        #px, pp, b, cls = result
+        px, pp, b = valid_set[i]
         x = px[0]
         p = pp
         px = tovar(px).permute(0, 3, 1, 2)
