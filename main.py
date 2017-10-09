@@ -11,6 +11,9 @@ import sh
 from util import addbox
 import argparse
 import sys
+import numpy as NP
+
+NP.set_printoptions(suppress=True)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--train_iter', type=int, default=1000, help='training iterations per epoch')
@@ -63,26 +66,44 @@ for epoch in range(args.epochs):
         px = tovar(px).permute(0, 3, 1, 2)
         pp = tovar(pp).permute(2, 0, 1)
         b = tovar(b)
-        _, loss, iou = model.forward(px, pp, b)
+        b_list, b_internal, b_internal_gt, loss, iou = model.forward(px, pp, b)
         opt.zero_grad()
         loss.backward()
+        grad_norm = 0
+        for p in model.parameters():
+            if p.grad is None:
+                continue
+            grad_norm += p.grad.data.norm(2) ** 2
+        grad_norm = NP.sqrt(grad_norm)
+        '''
+        if grad_norm > 1:
+            for p in model.parameters():
+                if p.grad is None:
+                    continue
+                p.grad.data = p.grad.data / grad_norm * 1
+        '''
         opt.step()
-        print 'Training', epoch, i, tonumpy(loss), tonumpy(iou)
+        print 'Training', epoch, i, tonumpy(loss), tonumpy(iou), grad_norm
+        print tonumpy(b_internal)[0], tonumpy(b_internal_gt)[0]
 
-    model.eval()
+    model.train()
     iou_sum = 0
     for i in range(valid_size):
-        px, pp, b = valid_set[i]
+        result = dataset.prepare_batch(1, 1, data, 15, 5, -0.4, 0.4, resize=None, swapdims=False, train=True,
+                random=False, target_resize=False)
+
+        px, pp, b, cls = result
+        #px, pp, b = valid_set[i]
         x = px[0]
         p = pp
         px = tovar(px).permute(0, 3, 1, 2)
         pp = tovar(pp).permute(2, 0, 1)
         b = tovar(b)
 
-        b_list, loss, iou = model.forward(px, pp, b, 1)
+        b_list, b_internal, b_internal_gt, loss, iou = model.forward(px, pp, b, 1)
         iou_sum += tonumpy(iou)
         print 'Validation', epoch, i, tonumpy(loss), tonumpy(iou)
-        b, b_list = tonumpy(b, b_list)
+        b, b_list, b_internal, b_internal_gt = tonumpy(b, b_list, b_internal, b_internal_gt)
 
         for t in range(5):
             fig, ax = PL.subplots(2, 4)
@@ -91,6 +112,8 @@ for epoch in range(args.epochs):
             addbox(ax[0][0], b_list[0, t], 'yellow')
             ax[0][1].imshow(p[:, :, ::-1])
             ax[0][2].imshow(model.p_t_list[t][0].transpose(1, 2, 0)[:, :, ::-1])
+            addbox(ax[0][2], (b_internal_gt[0, t] + 1) * 112, 'red')
+            addbox(ax[0][2], (b_internal[0, t] + 1) * 112, 'yellow')
             ax[0][2].set_title(figure_title(model.cls_t_0_tops[0, 0], model.pi_t_0_tops[0, 0]), fontsize=6)
             # We always show top-5 CAMs here regardless of the actual k value
             ax[0][3].imshow(model.m_t_topk[t][0, 0])
@@ -109,4 +132,4 @@ for epoch in range(args.epochs):
                 PL.savefig('viz-val/%05d-%05d-%d.png' % (epoch, i, t))
             PL.close()
     print 'Average validation IOU:', iou_sum / valid_size
-    T.save(model, 'model-%03d' % epoch)
+    T.save(model, '/beegfs/qg323/model-%03d' % epoch)

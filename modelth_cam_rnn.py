@@ -2,6 +2,7 @@
 import torch as T
 import torch.nn as NN
 import torch.nn.functional as F
+import torch.nn.init as INIT
 from torchvision.models import squeezenet1_1
 
 import pickle
@@ -120,6 +121,22 @@ def crop_bilinear(x, b, size):
 
     return bilin.view(*(list(pre_chan_size) + [nchan, crow, ccol]))
 
+def init_lstm(lstm):
+    for name, param in lstm.named_parameters():
+        if name.startswith('weight_ih'):
+            INIT.xavier_uniform(param.data)
+        elif name.startswith('weight_hh'):
+            INIT.orthogonal(param.data)
+        elif name.startswith('bias'):
+            INIT.constant(param.data, 0)
+
+def init_weights(module):
+    for name, param in module.named_parameters():
+        if name.find('weight') != -1:
+            INIT.xavier_uniform(param.data)
+        elif name.find('bias') != -1:
+            INIT.constant(param.data, 0.1)
+
 
 class GlobalAvgPool2d(NN.Module):
     def __init__(self):
@@ -132,11 +149,6 @@ class GlobalAvgPool2d(NN.Module):
 class Model(NN.Module):
     def __init__(self, k):
         super(Model, self).__init__()
-        self.sq = squeezenet1_1(pretrained=True)
-        for p in self.sq.parameters():
-            p.requires_grad = False
-        self.classifier = NN.Sequential(
-                *(list(self.sq.classifier.children())[:-1] + [GlobalAvgPool2d()]))
         self.k = k
 
         self.cam_compressor = NN.Sequential(
@@ -171,6 +183,18 @@ class Model(NN.Module):
 
         self.teaching = True
 
+        for m in self.children():
+            if isinstance(m, NN.LSTM):
+                init_lstm(m)
+            elif isinstance(m, NN.Module):
+                init_weights(m)
+
+        self.sq = squeezenet1_1(pretrained=True)
+        for p in self.sq.parameters():
+            p.requires_grad = False
+        self.classifier = NN.Sequential(
+                *(list(self.sq.classifier.children())[:-1] + [GlobalAvgPool2d()]))
+
     def train(self, mode=True):
         super(Model, self).train(mode)
         self.sq.eval()
@@ -183,11 +207,14 @@ class Model(NN.Module):
         h = T.abs(b[:, 2] - b[:, 0])
         rows, cols = size
 
-        new_w = w * (tovar(RNG.uniform(1.5, 2, (batch_size,))) if self.training else 2)
-        new_h = h * (tovar(RNG.uniform(1.5, 2, (batch_size,))) if self.training else 2)
+        new_w = w * (tovar(RNG.uniform(1.5, 2.5, (batch_size,))) if self.training else 2)
+        new_h = h * (tovar(RNG.uniform(1.5, 2.5, (batch_size,))) if self.training else 2)
 
-        cx = cx + w * (tovar(RNG.uniform(-0.1, 0.1, (batch_size,))) if self.training else 0)
-        cy = cy + h * (tovar(RNG.uniform(-0.1, 0.1, (batch_size,))) if self.training else 0)
+        w_shift = (new_w - w) / 2
+        h_shift = (new_h - h) / 2
+
+        cx = cx + (tovar(RNG.uniform(-1, 1, (batch_size,))) if self.training else 0) * w_shift
+        cy = cy + (tovar(RNG.uniform(-1, 1, (batch_size,))) if self.training else 0) * h_shift
 
         top = T.clamp(cy - new_h / 2, 0, rows)
         left = T.clamp(cx - new_w / 2, 0, cols)
@@ -229,9 +256,14 @@ class Model(NN.Module):
         w = w.unsqueeze(0).expand(batch_size, 1000, 512)
         return w.bmm(phi.view(batch_size, 512, -1)).view(batch_size, 1000, 13, 13)
 
+    @property
+    def visualize(self):
+        #return not self.training
+        return True
+
     def get_top_classes(self, pi):
         pi_tops, pi_indices = F.softmax(pi).topk(self.k, 1, sorted=True)
-        if not self.training:
+        if self.visualize:
             pi_indices_np = tonumpy(pi_indices)
             cls_t_tops = NP.array([[self.labels[i] for i in s] for s in pi_indices_np])
         else:
@@ -253,6 +285,8 @@ class Model(NN.Module):
         self.pi_t_0_tops, self.pi_t_0_indices, self.cls_t_0_tops = tonumpy(*self.get_top_classes(pi_t_0))
         b_t_1 = b[0].unsqueeze(0).expand(batch_size, 4)
         b_list = []
+        b_internal_list = []
+        b_internal_gt_list = []
         loss = 0
         self.m_t_topk = []
         self.pi_t_topk = []
@@ -281,7 +315,7 @@ class Model(NN.Module):
             pi_t_trunc = pi_t_trunc.scatter_(1, pi_t_indices, pi_t_tops)
             m_t = m_t_all * pi_t_trunc[:, :, NP.newaxis, NP.newaxis].expand(batch_size, 1000, 13, 13)
 
-            if not self.training:
+            if self.visualize:
                 m_t_indices_0 = tovar(T.arange(0, batch_size)).data
                 m_t_indices_0 = m_t_indices_0.long().unsqueeze(1).expand(batch_size, self.k)
                 m_t_indices_0 = m_t_indices_0.contiguous().view(-1)
@@ -296,8 +330,10 @@ class Model(NN.Module):
             b_hat = self.b_decision(b_input.view(batch_size, -1))
             b_t_1 = self.scale_from(b_hat, s_t)
             b_list.append(b_t_1)
+            b_internal_list.append(b_hat)
+            b_internal_gt_list.append(self.scale_to(b[t].unsqueeze(0), s_t))
 
-            loss += T.abs(b_hat - self.scale_to(b[t].unsqueeze(0), s_t)).mean()
+            loss += (T.abs(b_hat - self.scale_to(b[t].unsqueeze(0), s_t))).mean()
 
             self.m_t_topk.append(tonumpy(m_t_gathered))
             self.pi_t_topk.append(tonumpy(pi_t_tops))
@@ -306,4 +342,6 @@ class Model(NN.Module):
             self.s_t_list.append(tonumpy(s_t))
 
         b_hat = T.stack(b_list, 1)
-        return b_hat, loss, compute_iou(b_hat, b.unsqueeze(0).expand(batch_size, nframes, 4)).mean()
+        b_internal = T.stack(b_internal_list, 1)
+        b_internal_gt = T.stack(b_internal_gt_list, 1)
+        return b_hat, b_internal, b_internal_gt, loss, compute_iou(b_hat, b.unsqueeze(0).expand(batch_size, nframes, 4)).mean()
