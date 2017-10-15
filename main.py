@@ -1,6 +1,6 @@
 
 import dataset
-from modelth_cam_rnn import Model, tovar, tonumpy
+from modelth_cam_rnn import Model, tovar, tonumpy, compute_iou, compute_dev
 import torch as T
 import os
 import matplotlib
@@ -21,12 +21,13 @@ parser.add_argument('--epochs', type=int, default=5, help='# of epochs')
 parser.add_argument('--valid_size', type=int, default=10, help='validation set size')
 parser.add_argument('-k', type=int, default=5, help='number of activated CAMs')
 parser.add_argument('--ilsvrc', type=str, help='location of ImageNet VID dataset')
+parser.add_argument('--rnn', action='store_true')
 
 args = parser.parse_args()
 
 sh.mkdir('-p', 'viz-val')
 
-model = Model(args.k)
+model = Model(args.k, args.rnn_enabled)
 if not os.getenv('NOCUDA', None):
     model = model.cuda()
 data = dataset.ImageNetVidDataset(args.ilsvrc, 'map_vid.txt')
@@ -66,7 +67,9 @@ for epoch in range(args.epochs):
         px = tovar(px).permute(0, 3, 1, 2)
         pp = tovar(pp).permute(2, 0, 1)
         b = tovar(b)
-        b_list, b_internal, b_internal_gt, loss, iou = model.forward(px, pp, b)
+        b_list, b_internal, b_internal_gt, loss, b_gt = model.forward(px, pp, b)
+        iou = compute_iou(b_list.data, b_gt.data).mean()
+        d_pos, d_size, d_w_scale, d_h_scale = compute_dev(b_gt.data, b_list.data)
         opt.zero_grad()
         loss.backward()
         grad_norm = 0
@@ -75,19 +78,15 @@ for epoch in range(args.epochs):
                 continue
             grad_norm += p.grad.data.norm(2) ** 2
         grad_norm = NP.sqrt(grad_norm)
-        '''
-        if grad_norm > 1:
-            for p in model.parameters():
-                if p.grad is None:
-                    continue
-                p.grad.data = p.grad.data / grad_norm * 1
-        '''
         opt.step()
-        print 'Training', epoch, i, tonumpy(loss), tonumpy(iou), grad_norm
-        print tonumpy(b_internal)[0], tonumpy(b_internal_gt)[0]
+        print 'Training', epoch, i, tonumpy(loss), iou, d_pos.mean(), d_pos.std(), d_size.mean(), d_size.std(), d_w_scale.mean(), d_h_scale.mean(), grad_norm
 
     model.train()
     iou_sum = 0
+    d_pos_sum = 0
+    d_size_sum = 0
+    d_w_scale_sum = 0
+    d_h_scale_sum = 0
     for i in range(valid_size):
         px, pp, b = valid_set[i]
         x = px[0]
@@ -96,9 +95,15 @@ for epoch in range(args.epochs):
         pp = tovar(pp).permute(2, 0, 1)
         b = tovar(b)
 
-        b_list, b_internal, b_internal_gt, loss, iou = model.forward(px, pp, b, 1)
-        iou_sum += tonumpy(iou)
-        print 'Validation', epoch, i, tonumpy(loss), tonumpy(iou)
+        b_list, b_internal, b_internal_gt, loss, b_gt = model.forward(px, pp, b, 1)
+        iou = compute_iou(b_list.data, b_gt.data).mean()
+        d_pos, d_size, d_w_scale, d_h_scale = compute_dev(b_gt.data, b_list.data)
+        iou_sum += iou
+        d_pos_sum += d_pos.mean()
+        d_size_sum += d_size.mean()
+        d_w_scale_sum += d_w_scale.mean()
+        d_h_scale_sum += d_h_scale.mean()
+        print 'Validation', epoch, i, tonumpy(loss), iou, d_pos.mean(), d_pos.std(), d_size.mean(), d_size.std(), d_w_scale.mean(), d_h_scale.mean()
         b, b_list, b_internal, b_internal_gt = tonumpy(b, b_list, b_internal, b_internal_gt)
 
         for t in range(5):
@@ -128,4 +133,8 @@ for epoch in range(args.epochs):
                 PL.savefig('viz-val/%05d-%05d-%d.png' % (epoch, i, t))
             PL.close()
     print 'Average validation IOU:', iou_sum / valid_size
+    print 'Average center deviation:', d_pos_sum / valid_size
+    print 'Average log size deviation:', d_size_sum / valid_size
+    print 'Average x-axis deviation / width:', d_w_scale_sum / valid_size
+    print 'Average y-axis deviation / height:', d_h_scale_sum / valid_size
     T.save(model, '/beegfs/qg323/model-%03d' % epoch)

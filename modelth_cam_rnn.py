@@ -3,7 +3,7 @@ import torch as T
 import torch.nn as NN
 import torch.nn.functional as F
 import torch.nn.init as INIT
-from torchvision.models import squeezenet1_1
+from torchvision.models import squeezenet1_0
 
 import pickle
 import os
@@ -76,6 +76,26 @@ def compute_iou(a, b):
     union_area1 = union_area + (union_area == 0).float()
     return inter_area1 / union_area1
 
+def compute_dev(a, b):
+    a_cx = (a[..., 1] + a[..., 3]) / 2
+    a_cy = (a[..., 0] + a[..., 2]) / 2
+    a_w = T.abs(a[..., 3] - a[..., 1])
+    a_h = T.abs(a[..., 2] - a[..., 0])
+    b_cx = (b[..., 1] + b[..., 3]) / 2
+    b_cy = (b[..., 0] + b[..., 2]) / 2
+    b_w = T.abs(b[..., 3] - b[..., 1])
+    b_h = T.abs(b[..., 2] - b[..., 0])
+
+    d_cx = a_cx - b_cx
+    d_cy = a_cy - b_cy
+    d_pos = T.sqrt(d_cx ** 2 + d_cy ** 2)
+    # The point is to make the size ratio of 1/1.1 and 1.1 to have the same metric
+    d_size = T.abs(a_w.log() + a_h.log() - b_w.log() - b_h.log())
+    d_w_scale = T.abs(d_cx) / a_w
+    d_h_scale = T.abs(d_cy) / a_h
+
+    return d_pos, d_size, d_w_scale, d_h_scale
+
 def compute_acc(cls_out, cls_gt, c):
     cls_pred = cls_out.max(1)[1]
     cls_gt = cls_gt.long()
@@ -147,9 +167,10 @@ class GlobalAvgPool2d(NN.Module):
 
 
 class Model(NN.Module):
-    def __init__(self, k):
+    def __init__(self, k, rnn_enabled=False):
         super(Model, self).__init__()
         self.k = k
+        self.rnn_enabled = rnn_enabled
 
         self.cam_compressor = NN.Sequential(
                 NN.Conv2d(1000, 256, 1),
@@ -176,7 +197,11 @@ class Model(NN.Module):
                 NN.ReLU(),
                 NN.Linear(2000, 4),
                 )
-        self.cam_picker = NN.LSTM(1000, 1000)
+        self.cam_picker_rnn = NN.LSTMCell(1000, 1000)
+        self.cam_picker_feedfwd = NN.Sequential(
+                NN.Linear(1000, 1000),
+                NN.LogSoftmax(),
+                )
 
         with open('imagenet_labels2', 'rb') as f:
             self.labels = pickle.load(f)
@@ -189,7 +214,7 @@ class Model(NN.Module):
             elif isinstance(m, NN.Module):
                 init_weights(m)
 
-        self.sq = squeezenet1_1(pretrained=True)
+        self.sq = squeezenet1_0(pretrained=True)
         for p in self.sq.parameters():
             p.requires_grad = False
         self.classifier = NN.Sequential(
@@ -245,8 +270,13 @@ class Model(NN.Module):
 
         return b
 
-    def pi_mix(self, pi_old, pi_new, *args, **kwargs):
-        return pi_new
+    def pi_mix(self, pi_new, state, *args, **kwargs):
+        if self.rnn_enabled:
+            h, c = self.cam_picker_rnn(pi_new, state)
+            pi_new = pi_new + self.cam_picker_feedfwd(h)
+            return pi_new, (h, c)
+        else:
+            return pi_new, state
 
     def cam(self, phi):
         batch_size = phi.size()[0]
@@ -281,7 +311,15 @@ class Model(NN.Module):
         std = tovar(T.Tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
         nframes, nchannels, rows, cols = x.size()
         phi = self.sq.features((target.unsqueeze(0) - mean) / std)
-        pi_t_0 = pi_t = self.classifier(phi).squeeze(3).squeeze(2)
+        pi_t = self.classifier(phi).squeeze(3).squeeze(2)
+
+        lstm_state = (
+                tovar(T.zeros(batch_size, 1000)),
+                tovar(T.zeros(batch_size, 1000)),
+                )
+        pi_t, lstm_state = self.pi_mix(pi_t.expand(batch_size, 1000), lstm_state)
+        pi_t_0 = pi_t
+
         self.pi_t_0_tops, self.pi_t_0_indices, self.cls_t_0_tops = tonumpy(*self.get_top_classes(pi_t_0))
         b_t_1 = b[0].unsqueeze(0).expand(batch_size, 4)
         b_list = []
@@ -307,7 +345,7 @@ class Model(NN.Module):
                     )
             phi_t = self.sq.features((p_t - mean) / std)
             pi_t_new = self.classifier(phi_t).squeeze(3).squeeze(2)
-            pi_t = self.pi_mix(pi_t, pi_t_new)
+            pi_t, lstm_state = self.pi_mix(pi_t_new, lstm_state)
 
             m_t_all = self.cam(phi_t)
             pi_t_tops, pi_t_indices, cls_t_tops = self.get_top_classes(pi_t)
@@ -344,4 +382,5 @@ class Model(NN.Module):
         b_hat = T.stack(b_list, 1)
         b_internal = T.stack(b_internal_list, 1)
         b_internal_gt = T.stack(b_internal_gt_list, 1)
-        return b_hat, b_internal, b_internal_gt, loss, compute_iou(b_hat, b.unsqueeze(0).expand(batch_size, nframes, 4)).mean()
+        b_gt = b.unsqueeze(0).expand(batch_size, nframes, 4)
+        return b_hat, b_internal, b_internal_gt, loss, b_gt

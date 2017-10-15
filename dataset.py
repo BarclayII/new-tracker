@@ -199,10 +199,11 @@ class ImageNetVidDatasetBase(VideoDataset):
 
         anno = self._load_file(anno_file)
         anno_root = ETREE.parse(anno, parser=_parser).getroot()
-        obj = anno_root.find('object')
-        if obj is None:
+        objs = anno_root.findall('object')
+        if len(objs) == 0:
             return NP.array([]), NP.array([]), NP.array([])
-        trackid = obj.find('trackid').text
+        trackids = set(o.find('trackid').text for o in objs)
+        trackid = trackids[RNG.choice(len(trackids))]
         cls_idx = self.classes.index(obj.find('name').text)
         folder = anno_root.find('folder').text
         data_dir = self._getpath('Data/VID/%s/%s' % ('train' if train else 'val', folder))
