@@ -104,7 +104,7 @@ for epoch in range(args.epochs):
         d_w_scale_sum += d_w_scale.mean()
         d_h_scale_sum += d_h_scale.mean()
         print 'Validation', epoch, i, tonumpy(loss), iou, d_pos.mean(), d_pos.std(), d_size.mean(), d_size.std(), d_w_scale.mean(), d_h_scale.mean()
-        b, b_list, b_internal, b_internal_gt = tonumpy(b, b_list, b_internal, b_internal_gt)
+        px, b, b_list, b_internal, b_internal_gt = tonumpy(px, b, b_list, b_internal, b_internal_gt)
 
         for t in range(5):
             fig, ax = PL.subplots(2, 4)
