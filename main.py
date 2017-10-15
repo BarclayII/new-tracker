@@ -27,7 +27,7 @@ args = parser.parse_args()
 
 sh.mkdir('-p', 'viz-val')
 
-model = Model(args.k, args.rnn_enabled)
+model = Model(args.k, args.rnn)
 if not os.getenv('NOCUDA', None):
     model = model.cuda()
 data = dataset.ImageNetVidDataset(args.ilsvrc, 'map_vid.txt')
