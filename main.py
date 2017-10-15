@@ -89,7 +89,7 @@ for epoch in range(args.epochs):
     d_h_scale_sum = 0
     for i in range(valid_size):
         px, pp, b = valid_set[i]
-        x = px[0]
+        x = px
         p = pp
         px = tovar(px).permute(0, 3, 1, 2)
         pp = tovar(pp).permute(2, 0, 1)
@@ -108,7 +108,7 @@ for epoch in range(args.epochs):
 
         for t in range(5):
             fig, ax = PL.subplots(2, 4)
-            ax[0][0].imshow(x[:, :, ::-1])
+            ax[0][0].imshow(px[t, :, :, ::-1])
             addbox(ax[0][0], b[t], 'red')
             addbox(ax[0][0], b_list[0, t], 'yellow')
             ax[0][1].imshow(p[:, :, ::-1])
