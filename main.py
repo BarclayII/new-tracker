@@ -32,7 +32,7 @@ if not os.getenv('NOCUDA', None):
     model = model.cuda()
 data = dataset.ImageNetVidDataset(args.ilsvrc, 'map_vid.txt')
 
-opt = T.optim.Adam(p for p in model.parameters() if p.requires_grad)
+opt = T.optim.Adam([p for p in model.parameters() if p.requires_grad], lr=1e-4)
 
 valid_set = []
 
@@ -104,11 +104,11 @@ for epoch in range(args.epochs):
         d_w_scale_sum += d_w_scale.mean()
         d_h_scale_sum += d_h_scale.mean()
         print 'Validation', epoch, i, tonumpy(loss), iou, d_pos.mean(), d_pos.std(), d_size.mean(), d_size.std(), d_w_scale.mean(), d_h_scale.mean()
-        px, b, b_list, b_internal, b_internal_gt = tonumpy(px, b, b_list, b_internal, b_internal_gt)
+        x, b, b_list, b_internal, b_internal_gt = tonumpy(x, b, b_list, b_internal, b_internal_gt)
 
         for t in range(5):
             fig, ax = PL.subplots(2, 4)
-            ax[0][0].imshow(px[t, :, :, ::-1])
+            ax[0][0].imshow(x[t, :, :, ::-1])
             addbox(ax[0][0], b[t], 'red')
             addbox(ax[0][0], b_list[0, t], 'yellow')
             ax[0][1].imshow(p[:, :, ::-1])
